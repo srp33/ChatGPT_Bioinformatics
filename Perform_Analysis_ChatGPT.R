@@ -5,41 +5,21 @@ library(tidyverse)
 library(rvest)
 library(xml2)
 
-# unlink("Figures", recursive = TRUE)
-# dir.create("Figures", showWarnings = FALSE)
+source("Helper_Code.R")
 
-clean_code_segments = function(code_segments) {
-  segments = c()
+# This file is available upon request. When it's not available, this script will create everything it can with the data that are available.
+results_file_path = "Study_Results_ChatGPT/Results_with_instructor_solutions.html"
+if (!file.exists(results_file_path)) {
+  results_file_path = "Study_Results_ChatGPT/Results.html"
   
-  for (segment in code_segments) {
-    segments = c(segments, clean_code(segment))
+  if (!file.exists(results_file_path)) {
+    stop("The results file could not be found. Perhaps it is being your working directory is not set to the directory where this script is located.")
   }
-  
-  return(segments)
 }
 
-clean_code = function(code) {
-  mod_lines = c()
-  
-  for (line in str_split(code, "\\n")[[1]]) {
-    line = str_trim(line)
-
-    if (line == "")
-      next
-        
-    if (grepl("^#", line))
-      next
-    
-    mod_lines = c(mod_lines, line)
-  }
-  
-  return(str_c(mod_lines, collapse = "\n"))
-}
+data = read_html(results_file_path)
 
 # Read data from the spreadsheet (which has been converted to HTML) and remove extra column and rows. Also convert <br> tags back to newline characters.
-
-data = read_html("Study_Results_Feb242023.html")
-
 xml_find_all(data, ".//br") %>% xml_add_sibling("p", "\n")
 xml_find_all(data, ".//br") %>% xml_remove()
 
@@ -50,7 +30,7 @@ colnames(data) = data[1,]
 data = data[,c(2:3, 5:ncol(data))]
 data = data[3:nrow(data),]
 
-# Specify types for columns that need it.
+# Clean up the data a bit
 data = mutate(data, `Number of tests` = as.numeric(`Number of tests`)) %>%
   mutate(`Number of passed tests` = as.numeric(`Number of passed tests`)) %>%
   mutate(`Number of ChatGPT iterations` = as.numeric(`Number of ChatGPT iterations`)) %>%
@@ -59,18 +39,21 @@ data = mutate(data, `Number of tests` = as.numeric(`Number of tests`)) %>%
   mutate(passed_yes_no = factor(passed_yes_no, levels = c("Yes", "No"))) %>%
   mutate(chars_per_prompt = str_length(Instructions)) %>%
   mutate(`Number of ChatGPT iterations` = factor(`Number of ChatGPT iterations`, levels=1:10)) %>%
-  mutate(instructor_solution_simplified = clean_code_segments(`Instructor's solution`)) %>%
-  mutate(chars_per_instructor_solution = str_length(instructor_solution_simplified)) %>%
-  mutate(lines_per_instructor_solution = str_count(instructor_solution_simplified, "\\n")) %>%
   mutate(gpt_solution_simplified = clean_code_segments(`ChatGPT solution`)) %>%
   mutate(chars_per_gpt_solution = str_length(gpt_solution_simplified)) %>%
   mutate(lines_per_gpt_solution = str_count(gpt_solution_simplified, "\\n"))
+
+if ("Instructor's solution" %in% colnames(data)) {
+  data = mutate(data, instructor_solution_simplified = clean_code_segments(`Instructor's solution`)) %>%
+  mutate(chars_per_instructor_solution = str_length(instructor_solution_simplified)) %>%
+  mutate(lines_per_instructor_solution = str_count(instructor_solution_simplified, "\\n"))
+}
 
 # Iterations per exercise
 
 ggplot(data, aes(x = `Number of ChatGPT iterations`, fill = passed_yes_no)) +
   geom_bar() +
-  geom_text(stat='count', aes(label=..count..), position = position_nudge(y = 5), size = 2.5, color = "#666666") +
+  geom_text(stat='count', aes(label=..count..), position = position_nudge(y = 5), size = 3.25, color = "#333333") +
   scale_x_discrete(drop=FALSE) +
   theme_bw() +
   scale_fill_manual(values=c("#4575b4", "#d73027")) +
@@ -78,73 +61,95 @@ ggplot(data, aes(x = `Number of ChatGPT iterations`, fill = passed_yes_no)) +
   ylab("Count") +
   guides(fill = guide_legend(title = "Passed"))
 
+if (!dir.exists("Figures")) {
+  dir.create("Figures")
+}
+
 ggsave("Figures/iterations_per_exercise.pdf", width = 6.5)
 
-# Lines of code per instructor solution
+if ("instructor_solution_simplified" %in% colnames(data)) {
+  # Lines of code per instructor solution
+  
+  plot_data = mutate(data, lines_per_instructor_solution = factor(lines_per_instructor_solution, levels = 1:max(lines_per_instructor_solution)))
+  
+  max_lines_per_instructor_solution = max(as.integer(pull(data, lines_per_instructor_solution)))
+  ticks = c(1, seq(5, max_lines_per_instructor_solution + 5, 5))
+  
+  ggplot(plot_data, aes(x = lines_per_instructor_solution, fill = passed_yes_no)) +
+    geom_bar() +
+    theme_bw() +
+    scale_fill_manual(values=c("#4575b4", "#d73027")) +
+    scale_x_discrete(breaks = ticks, labels = ticks, drop=FALSE) +
+    xlab("Lines of code per solution") +
+    ylab("Count") +
+    guides(fill = guide_legend(title = "Passed"))
+  
+  ggsave("Figures/lines_per_instructor_solution.pdf", width = 6.5)
 
-plot_data = mutate(data, lines_per_instructor_solution = factor(lines_per_instructor_solution, levels = 1:max(lines_per_instructor_solution)))
-
-max_lines_per_instructor_solution = max(as.integer(pull(data, lines_per_instructor_solution)))
-ticks = c(1, seq(5, max_lines_per_instructor_solution + 5, 5))
-
-ggplot(plot_data, aes(x = lines_per_instructor_solution, fill = passed_yes_no)) +
-  geom_bar() +
-  theme_bw() +
-  scale_fill_manual(values=c("#4575b4", "#d73027")) +
-  scale_x_discrete(breaks = ticks, labels = ticks, drop=FALSE) +
-  xlab("Lines of code per solution") +
-  ylab("Count") +
-  guides(fill = guide_legend(title = "Passed"))
-
-ggsave("Figures/lines_per_instructor_solution.pdf", width = 6.5)
-
-# Mean and median lines per instructor solution - overall
-
-print(mean(as.integer(pull(data, lines_per_instructor_solution)))) # 7.657609
-print(median(as.integer(pull(data, lines_per_instructor_solution)))) # 6
-
-# Mean and median lines per instructor solution - passing vs. non-passing
-
-passed_lines = filter(data, passed) %>%
-  pull(lines_per_instructor_solution)
-not_passed_lines = filter(data, !passed) %>%
-  pull(lines_per_instructor_solution)
-
-print(median(passed_lines)) # 6
-print(median(not_passed_lines)) # 7
-
-wilcox.test(passed_lines, not_passed_lines) # 0.2836
-
-# Length of instructor's solution vs. ChatGPT solution
-
-plot_data1 = filter(data, passed) %>%
-  select(chars_per_instructor_solution, chars_per_gpt_solution) %>%
-  dplyr::rename(instructor = chars_per_instructor_solution) %>%
-  dplyr::rename(gpt = chars_per_gpt_solution) %>%
-  mutate(metric_type = "# of characters")
-
-plot_data2 = filter(data, passed) %>%
-  select(lines_per_instructor_solution, lines_per_gpt_solution) %>%
-  dplyr::rename(instructor = lines_per_instructor_solution) %>%
-  dplyr::rename(gpt = lines_per_gpt_solution) %>%
-  mutate(metric_type = "# of lines")
-
-plot_data = bind_rows(plot_data1, plot_data2)
-
-ggplot(plot_data, aes(x = instructor, y = gpt)) +
-  geom_point() +
-  theme_bw() +
-  xlab("Instructor's solution") +
-  ylab("ChatGPT solution") +
-  facet_wrap(vars(metric_type), scales = "free") +
-  geom_abline(slope = 1, intercept = 0, col = "#d73027", linetype="dashed")
-
-ggsave("Figures/lengths_of_solutions.pdf", width = 6.5)
-
-# Correlation tests between instructor's and ChatGPT solutions
-
-print(cor.test(pull(plot_data1, instructor), pull(plot_data1, gpt), method="spearman")) # 2.2e-16
-print(cor.test(pull(plot_data2, instructor), pull(plot_data2, gpt), method="spearman")) # 2.2e-16
+  # Mean and median lines per instructor solution - overall
+  
+  print(mean(as.integer(pull(data, lines_per_instructor_solution)))) # 7.657609
+  print(median(as.integer(pull(data, lines_per_instructor_solution)))) # 6
+  
+  # Mean and median lines per instructor solution - passing vs. non-passing
+  
+  passed_lines = filter(data, passed) %>%
+    pull(lines_per_instructor_solution)
+  not_passed_lines = filter(data, !passed) %>%
+    pull(lines_per_instructor_solution)
+  
+  print(median(passed_lines)) # 6
+  print(median(not_passed_lines)) # 7
+  
+  wilcox.test(passed_lines, not_passed_lines) # 0.2836
+  
+  # Length of instructor's solution vs. ChatGPT solution
+  
+  plot_data1 = filter(data, passed) %>%
+    select(chars_per_instructor_solution, chars_per_gpt_solution) %>%
+    dplyr::rename(instructor = chars_per_instructor_solution) %>%
+    dplyr::rename(gpt = chars_per_gpt_solution) %>%
+    mutate(metric_type = "# of characters")
+  
+  plot_data2 = filter(data, passed) %>%
+    select(lines_per_instructor_solution, lines_per_gpt_solution) %>%
+    dplyr::rename(instructor = lines_per_instructor_solution) %>%
+    dplyr::rename(gpt = lines_per_gpt_solution) %>%
+    mutate(metric_type = "# of lines")
+  
+  plot_data = bind_rows(plot_data1, plot_data2)
+  
+  ggplot(plot_data, aes(x = instructor, y = gpt)) +
+    geom_point() +
+    theme_bw() +
+    xlab("Instructor's solution") +
+    ylab("ChatGPT solution") +
+    facet_wrap(vars(metric_type), scales = "free") +
+    geom_abline(slope = 1, intercept = 0, col = "#d73027", linetype="dashed")
+  
+  ggsave("Figures/lengths_of_solutions.pdf", width = 6.5)
+  
+  # Correlation tests between instructor's and ChatGPT solutions
+  
+  print(cor.test(pull(plot_data1, instructor), pull(plot_data1, gpt), method="spearman")) # 2.2e-16
+  print(cor.test(pull(plot_data2, instructor), pull(plot_data2, gpt), method="spearman")) # 2.2e-16
+  
+  # Correlation between length of instructor's solution and # of attempts
+  
+  x = pull(data, lines_per_instructor_solution)
+  y = pull(data, `Number of ChatGPT iterations`) %>%
+    as.numeric()
+  
+  print(cor.test(x, y, method="spearman")) # rho = 0.235, p = 0.001365
+  
+  x = filter(data, passed) %>%
+    pull(lines_per_instructor_solution)
+  y = filter(data, passed) %>%
+    pull(`Number of ChatGPT iterations`) %>%
+    as.numeric()
+  
+  print(cor.test(x, y, method="spearman")) # 0.002425
+}
 
 # Length of prompt for passing vs. non-passing
 
@@ -157,22 +162,6 @@ print(median(passed_length)) # 2036
 print(median(not_passed_length)) # 9115
 
 wilcox.test(passed_length, not_passed_length) # 0.1021
-
-# Correlation between length of instructor's solution and # of attempts
-
-x = pull(data, lines_per_instructor_solution)
-y = pull(data, `Number of ChatGPT iterations`) %>%
-  as.numeric()
-
-print(cor.test(x, y, method="spearman")) # rho = 0.235, p = 0.001365
-
-x = filter(data, passed) %>%
-  pull(lines_per_instructor_solution)
-y = filter(data, passed) %>%
-  pull(`Number of ChatGPT iterations`) %>%
-  as.numeric()
-
-print(cor.test(x, y, method="spearman")) # 0.002425
 
 # Correlation between length of prompt and # of attempts
 
