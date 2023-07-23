@@ -1,8 +1,8 @@
 ## Installation only needs to happen once.
-# install.packages("tidyverse")
+# install.packages(c("tidyverse"))
 
-library(tidyverse)
 library(rvest)
+library(tidyverse)
 library(xml2)
 
 source("Helper_Code.R")
